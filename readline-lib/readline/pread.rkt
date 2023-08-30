@@ -1,6 +1,10 @@
 #lang racket/base
 
-(require "rktrl.rkt" racket/list racket/file)
+(require "rktrl.rkt"
+         racket/list
+         racket/file
+         racket/function
+         racket/pretty)
 
 ;; --------------------------------------------------------------------------
 ;; Configuration
@@ -55,15 +59,38 @@
   (when ((length local-history) . > . (max-history))
     (set! local-history (take local-history (max-history)))))
 
+; Similar to call-with-input-file but returns default if the file does not exist
+(define (call-with-input-file-or-default path proc default)
+  (define (exn-filter e)
+    (and (exn:fail:filesystem:errno? e)
+         (equal? '(2 . posix)
+                 (exn:fail:filesystem:errno-errno e))))
+  (with-handlers ([exn-filter (const default)])
+    (call-with-input-file path proc)))
+
+(define (history-file-path)
+  (define (default-path)
+    (format "~a/.local/state" (getenv "HOME")))
+  (define base
+    (or (getenv "XDG_STATE_HOME")
+        (default-path)))
+  (make-directory* base)
+  (format "~a/racket-readline-history.rktd" base))
+
 (define (load-history)
-  (set! local-history (get-preference 'readline-input-history (lambda () null)))
+  (set! local-history
+    (call-with-input-file-or-default (history-file-path) read '()))
   (trim-local-history)
   (for-each add-history (reverse local-history)))
 ;; add it now to the actual history
 (load-history)
 
 (define (save-history)
-  (put-preferences '(readline-input-history) (list local-history)))
+  (call-with-output-file
+    (history-file-path)
+    (lambda (file) (pretty-write local-history file))
+    #:exists 'truncate/replace
+    #:permissions #o644))
 
 (define (add-to-history s force-keep?)
   (define keep (or force-keep? (keep-duplicates)))
